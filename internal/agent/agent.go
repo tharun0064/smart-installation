@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/newrelic/nr-diagnose/internal/config"
 	sysContext "github.com/newrelic/nr-diagnose/internal/context"
@@ -34,7 +35,7 @@ You MUST respond with ONLY a valid JSON object in this exact format:
 const systemPromptResolver = `You are the Remediation Engine. You receive:
 1. The original failed command and its error output
 2. The raw terminal output from the diagnostic commands you previously requested
-
+di
 Analyze the diagnostic output, isolate the definitive root cause, and provide:
 - A precise root cause statement
 - A plain-English explanation for the developer
@@ -75,7 +76,7 @@ type Agent struct {
 func New(cfg *config.Config) *Agent {
 	return &Agent{
 		cfg:    cfg,
-		client: &http.Client{},
+		client: &http.Client{Timeout: 30 * time.Second},
 	}
 }
 
