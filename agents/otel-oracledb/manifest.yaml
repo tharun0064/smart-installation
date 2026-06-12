@@ -1,0 +1,11 @@
+name: otel-oracledb
+display_name: "OpenTelemetry OracleDB Receiver"
+description: "Installs OTel Collector with the OracleDB receiver for database monitoring"
+target_os: linux
+ports: [1521]
+services: [otelcol-contrib]
+prerequisites:
+  - "Oracle Instant Client installed (or full Oracle Client)"
+  - "TNS_ADMIN environment variable set"
+  - "Oracle DB user with SELECT_CATALOG_ROLE or equivalent grants"
+  - "Network connectivity to Oracle DB on port 1521"

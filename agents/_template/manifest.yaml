@@ -1,0 +1,7 @@
+name: AGENT_NAME
+display_name: "AGENT_DISPLAY_NAME"
+description: "TODO: Add description"
+target_os: linux
+ports: []
+services: []
+prerequisites: []
