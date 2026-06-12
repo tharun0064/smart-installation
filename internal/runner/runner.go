@@ -34,7 +34,7 @@ func Run(steps []string, agentInfo *registry.Agent, llmAgent *agent.Agent, rbMgr
 	result := &Result{Total: len(steps)}
 
 	if opts.DryRun {
-		fmt.Println("Dry-run mode: showing parsed steps without executing\n")
+		fmt.Println("Dry-run mode: showing parsed steps without executing")
 		for i, step := range steps {
 			fmt.Printf("  [%d/%d] %s\n", i+1, len(steps), step)
 		}
