@@ -1,149 +1,186 @@
-To prime Claude (or any LLM) to baseline and write code for this project, you need to provide it with a structured, developer-focused technical brief. Models perform best when they are given explicit architectural boundaries, schema structures, and data flows rather than just high-level product goals.
+# nr-diagnose: AI-Powered Installation Diagnostics
 
-The comprehensive technical dataset below gives Claude everything it needs to begin generating actual implementation code, including the specific **architectural options** available for the project.
+## Project Overview
 
----
+A Python CLI tool that runs agent installation scripts step-by-step. When a step fails, it uses an LLM (Claude via Anthropic API) to diagnose the failure and suggest a fix interactively.
 
-## 📋 Project Context & Grounding
-
-* **Project Name:** Intelligent CLI Diagnostics Layer (Hackathon Prototype)
-* **Core Objective:** Intercept terminal installation failures, pass the state to an LLM, dynamically execute specific local diagnostic tools based on LLM intuition, and return an interactive, actionable remediation command.
-* **Target Scope for Prototype:** Focus entirely on a **Linux/Ubuntu environment** diagnosing a blocked database port connection failure (e.g., PostgreSQL on `5432` or MySQL on `3306`).
-
----
-
-## 🛠️ Implementation Options (The Tech Stack Matrix)
-
-Provide Claude with these exact options to decide how the prototype will be built. For a hackathon, **Option 1** is highly recommended for speed and reliability.
-
-| Layer | Option 1: Lightweight & Fast (Recommended) | Option 2: Full Enterprise Agent |
-| --- | --- | --- |
-| **CLI Runtime** | **Python 3.11+ (Typer + Rich)**<br>
-
-<br>• Fast setup, native OS execution, incredible UI visuals via Rich. | **Node.js (Commander + Chalk + Ora)**<br>
-
-<br>• Great if the team consists entirely of frontend/JS developers. |
-| **AI Integration** | **Instructor Library (Pydantic)**<br>
-
-<br>• Directly forces OpenAI/Anthropic to output strict Python objects. No syntax parsing errors. | **LangChain / LangGraph**<br>
-
-<br>• Powerful state machines, but can add unnecessary complexity for a 48-hour build. |
-| **LLM Provider** | **OpenAI (`gpt-4o-mini`)** or **Anthropic (`claude-3-5-haiku`)**<br>
-
-<br>• Ultra-cheap, milliseconds-fast latency, native structured outputs. | **Ollama (Local `Llama-3`)**<br>
-
-<br>• Completely free/local, but slower on hackathon laptops and harder to enforce strict JSON schemas reliably. |
-
----
-
-## 🔄 System Flow & State Machine
+## Architecture Flow
 
 ```
-[Phase 1: Interception] ──> Run Installer ──> Catch Error Trace & Local OS Context
-                                                     │
-                                                     ▼
-[Phase 2: Hypothesis]   ──> Send to LLM ──> Receive Local Terminal Commands To Run
-                                                     │
-                                                     ▼
-[Phase 3: Execution]    ──> Run Diagnostics (e.g., netstat, nc) ──> Pipe Output to LLM
-                                                     │
-                                                     ▼
-[Phase 4: Remediation]  ──> LLM Gen Final Fix ──> Render UI ──> Interactive [Y/n] Exec
+User runs: nr-diagnose run --agent otel-oracledb
 
+        ┌─────────────────────────────────────┐
+        │  1. Load Config (.env)              │
+        │     - ANTHROPIC_API_KEY             │
+        │     - ANTHROPIC_BASE_URL            │
+        │     - LLM_MODEL_NAME                │
+        └──────────────┬──────────────────────┘
+                       │
+        ┌──────────────▼──────────────────────┐
+        │  2. Load Agent Definition           │
+        │     agents/otel-oracledb/           │
+        │     - manifest.yaml (metadata)      │
+        │     - install.sh (steps)            │
+        │     - knowledge/ (context for LLM)  │
+        │     - diagnostics/hints.yaml        │
+        │     - runbook/ (cached fixes)       │
+        └──────────────┬──────────────────────┘
+                       │
+        ┌──────────────▼──────────────────────┐
+        │  3. Parse install.sh → Steps        │
+        │     Splits script into individual   │
+        │     commands, handles continuations  │
+        └──────────────┬──────────────────────┘
+                       │
+        ┌──────────────▼──────────────────────┐
+        │  4. Execute Each Step               │
+        │     bash -c "<command>"             │
+        │                                     │
+        │     ✓ Success → next step           │
+        │     ✗ Failure → enter diagnosis     │
+        └──────────────┬──────────────────────┘
+                       │ (on failure)
+        ┌──────────────▼──────────────────────┐
+        │  5. Check Runbook First             │
+        │     Pattern-match error against     │
+        │     known fixes (seeded + local)    │
+        │     If found → skip LLM, show fix   │
+        └──────────────┬──────────────────────┘
+                       │ (no match)
+        ┌──────────────▼──────────────────────┐
+        │  6. LLM Turn 1: Diagnose           │
+        │     Send to Claude:                 │
+        │       - Failed command + error      │
+        │       - OS context (distro, user)   │
+        │       - Agent knowledge             │
+        │     Receive back:                   │
+        │       - hypothesis                  │
+        │       - diagnostic_commands[]       │
+        └──────────────┬──────────────────────┘
+                       │
+        ┌──────────────▼──────────────────────┐
+        │  7. Run Diagnostic Commands         │
+        │     Only allowlisted safe commands  │
+        │     (nc, netstat, systemctl status) │
+        │     No sudo, no destructive ops     │
+        └──────────────┬──────────────────────┘
+                       │
+        ┌──────────────▼──────────────────────┐
+        │  8. LLM Turn 2: Remediate           │
+        │     Send to Claude:                 │
+        │       - Original error              │
+        │       - Diagnostic outputs          │
+        │     Receive back:                   │
+        │       - root_cause                  │
+        │       - human_explanation           │
+        │       - remediation_command         │
+        │       - is_destructive              │
+        └──────────────┬──────────────────────┘
+                       │
+        ┌──────────────▼──────────────────────┐
+        │  9. Prompt User                     │
+        │     [Y]es → run fix, retry step     │
+        │     [n]o  → skip step               │
+        │     [q]uit → exit                   │
+        │                                     │
+        │     If fix works → save to runbook  │
+        └─────────────────────────────────────┘
 ```
 
----
+## Module Map
 
-## 🗂️ Data Schemas (JSON/Pydantic)
+```
+nr_diagnose/
+├── cli.py          Entry point. Typer commands: run, list, new-agent, sync
+├── config.py       Loads .env → Config dataclass
+├── schemas.py      Data models (StepResult, DiagnosticPayload, RemediationPayload, etc.)
+├── parser.py       Splits install.sh into executable steps
+├── context.py      Collects OS info (distro, kernel, hostname, user)
+├── scrub.py        Redacts API keys/passwords before sending to LLM
+├── registry.py     Loads agent definitions from agents/ directory
+├── diagnostics.py  Allowlisted safe command execution
+├── agent.py        Anthropic SDK client - Turn 1 (diagnose) + Turn 2 (remediate)
+├── runbook.py      Pattern matching cache of previously fixed issues
+├── ui.py           Rich terminal output (colors, panels, prompts)
+└── runner.py       Main loop: execute steps → diagnose failures → apply fixes
+```
 
-To avoid LLM hallucination or broken outputs, Claude must force the AI to communicate using strict, predictable data schemas.
+## LLM Integration (agent.py)
 
-### 1. The Diagnostic Collection Schema (Turn 1 Output)
-
-When the installation first fails, the LLM must look at the error and output *only* this structure to tell the CLI what diagnostic commands to run:
+Uses the Anthropic Python SDK with nerd-completion proxy:
 
 ```python
-from pydantic import BaseModel, Field
-from typing import List
+from anthropic import Anthropic
 
-class DiagnosticPayload(BaseModel):
-    hypothesis: str = Field(description="The AI's initial guess of what is wrong based on the installation error.")
-    diagnostic_commands: List[str] = Field(description="List of safe, local bash commands to execute to test the hypothesis (e.g., ['nc -zv localhost 5432', 'ufw status']).")
+client = Anthropic(
+    auth_token=os.getenv("ANTHROPIC_API_KEY"),
+    base_url=os.getenv("ANTHROPIC_BASE_URL"),
+)
 
+response = client.messages.create(
+    model="claude-sonnet-4-5-20250514",
+    max_tokens=1024,
+    system="<system prompt>",
+    messages=[{"role": "user", "content": "<user prompt>"}],
+)
 ```
 
-### 2. The Remediation Schema (Turn 2 Output)
+Two-turn conversation:
+- **Turn 1 (Detective):** Receives failure context → returns diagnostic commands as JSON
+- **Turn 2 (Resolver):** Receives diagnostic output → returns fix command as JSON
 
-After the CLI runs those commands and returns the raw terminal text, the LLM processes it and returns the final resolution schema:
-
-```python
-class RemediationPayload(BaseModel):
-    root_cause: str = Field(description="The precise, isolated reason for the network block.")
-    human_explanation: str = Field(description="A plain-English explanation summarizing what is wrong for the developer.")
-    remediation_command: str = Field(description="The exact terminal command needed to resolve the issue (e.g., 'sudo ufw allow 5432/tcp').")
-    is_destructive: bool = Field(description="Flag true if the remediation command could alter critical system data.")
+## Configuration (.env)
 
 ```
-
----
-
-## 🎭 Prompt Engineering Blueprints
-
-### System Prompt 1: The Detective (Turn 1)
-
-```text
-You are the Intelligent Inference Engine of a DevOps installation CLI wrapper. 
-An installation script has just failed. Your job is to select the exact, localized terminal diagnostic utilities needed to isolate the network topology bottleneck.
-
-CRITICAL SAFETY: You may only emit read-only diagnostic commands (e.g., ping, nc, netstat, ufw status, iptables -L, curl). Do NOT emit destructive or modifying commands.
-
+ANTHROPIC_API_KEY=NCUT-...        # nerd-completion token
+ANTHROPIC_BASE_URL=https://nerd-completion.staging-service.nr-ops.net
+LLM_MODEL_NAME=claude-sonnet-4-5-20250514
+NR_DIAGNOSE_AGENTS_DIR=./agents   # optional
 ```
 
-### System Prompt 2: The Resolver (Turn 2)
-
-```text
-You are the Remediation Engine. You will receive the raw terminal logs generated by the diagnostic commands you previously requested. 
-Analyze the logs, isolate the definitive root cause, and synthesize a single, clean, concrete terminal command that the user can execute to permanently fix their local environment mismatch. 
-Keep explanations highly punchy, empathetic, and developer-centric.
+## Agent Definition Structure
 
 ```
-
----
-
-## 🧪 Mock Data for Testing & Validation
-
-Provide these mock scenarios so Claude can write unit tests or dry-run simulations without hitting live infrastructure:
-
-### Scenario A: Closed Local Firewall (UFW)
-
-* **Agent Type:** PostgreSQL Monitoring Agent
-* **Initial Error Caught:** `dial tcp 127.0.0.1:5432: connect: connection refused`
-* **Expected Diagnostic Output:** `nc: connect to localhost (127.0.0.1) port 5432 (tcp) failed: Connection refused`
-* **Expected Final Remediation:** `sudo ufw allow 5432/tcp`
-
-### Scenario B: Cloud Security Group/Timeout Block
-
-* **Agent Type:** Cloud Metrics Forwarder
-* **Initial Error Caught:** `Error: Connect timed out to telemetry.api.provider.com:443 after 15000ms`
-* **Expected Diagnostic Output:** `traceroute to telemetry.api.provider.com... drops off entirely at router hop #4.`
-* **Expected Final Remediation:** *"Your corporate outbound proxy or AWS Security Group is dropping packets to our endpoint. Please whitelist outbound TCP traffic to port 443 for telemetry.api.provider.com."*
-
----
-
-## 🎯 Copy-Paste Prompt to Initialize Claude
-
-Once you choose your path, paste this exact block directly into Claude to generate your codebase boilerplate:
-
-```text
-"We are building the Intelligent CLI Diagnostics Layer hackathon project based on the provided technical brief. 
-
-We choose OPTION 1: Python (Typer + Rich) with OpenAI (gpt-4o-mini) using the Instructor library for strict Pydantic parsing.
-
-Please generate a single, fully functional python script (`diagnose_cli.py`) that:
-1. Implements a mock 'failed installation' command simulating a blocked port 5432.
-2. Implements the Instructor/OpenAI client configuration.
-3. Implements the two-turn diagnostic and remediation state machine loop using the exact Pydantic schemas specified.
-4. Uses Python's `subprocess` module safely to run the LLM-requested diagnostic checks.
-5. Uses the Rich library to print beautiful spinners, layout boxes, and interactive [y/N] prompts for the user to auto-execute the remediation command."
-
+agents/<name>/
+├── manifest.yaml              # name, description, ports, services, prerequisites
+├── install.sh                 # The installation script (parsed into steps)
+├── knowledge/
+│   ├── prerequisites.md       # What must be true before install
+│   ├── common-failures.md     # Known failure modes (fed to LLM)
+│   └── references.md          # Links to official docs
+├── diagnostics/
+│   └── hints.yaml             # priority_commands + context_hints for LLM
+└── runbook/
+    └── index.yaml             # Cached pattern → fix mappings
 ```
+
+## Safety
+
+- Diagnostic commands are allowlisted (diagnostics.py): ping, nc, netstat, ss, curl, etc.
+- No sudo allowed in diagnostics
+- `cat` restricted to /etc/ paths only
+- `systemctl` restricted to `status` subcommand only
+- PII scrubbed before sending to LLM (scrub.py)
+- Destructive remediations flagged to user with warning
+
+## Running
+
+```bash
+# Setup (one time)
+source setup.sh
+
+# Execute
+nr-diagnose run --agent otel-oracledb
+nr-diagnose run --agent otel-oracledb --dry-run
+nr-diagnose list
+nr-diagnose new-agent <name>
+nr-diagnose sync
+```
+
+## Key Design Decisions
+
+1. **Runbook-first:** Always checks cached fixes before calling LLM (saves time/cost)
+2. **Two-turn LLM:** Separates diagnosis from remediation for better accuracy
+3. **Human-in-the-loop:** Never auto-executes fixes; always prompts [Y/n/q]
+4. **Learning system:** Successful LLM fixes get saved to local runbook for next time
+5. **Agent-scoped knowledge:** Each agent carries its own domain context for the LLM
