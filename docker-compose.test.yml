@@ -1,0 +1,77 @@
+services:
+  oracle:
+    image: gvenzl/oracle-free:23-slim
+    container_name: nr-test-oracle
+    environment:
+      ORACLE_PASSWORD: Welcome123
+      APP_USER: otel
+      APP_USER_PASSWORD: otelpass
+    healthcheck:
+      test: ["CMD", "healthcheck.sh"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 60s
+    networks:
+      - nr-test
+
+  nr-diagnose:
+    build: .
+    container_name: nr-test-diagnose
+    env_file: .env
+    environment:
+      # Pre-fill the input prompts with values that match the oracle service above.
+      # The user can still override at the prompt; these just become the [defaults].
+      ORACLE_HOST: oracle
+      ORACLE_PORT: "1521"
+      ORACLE_USERNAME: otel
+      ORACLE_PASSWORD: otelpass
+      ORACLE_SERVICE: FREEPDB1
+      NEW_RELIC_OTLP_ENDPOINT: https://staging-otlp.nr-data.net
+    stdin_open: true
+    tty: true
+    init: true
+    depends_on:
+      oracle:
+        condition: service_healthy
+    volumes:
+      # Persist saved inputs (.config.env) and SEEDED runbook entries across runs
+      - ./agents:/app/agents
+      # Live-mount the source so code edits don't require rebuild
+      - ./nr_diagnose:/app/nr_diagnose
+      # Persist LOCAL runbook entries (where successful AI-driven fixes are saved).
+      # Without this, ~/.nr-diagnose lives only inside the container and vanishes on --rm.
+      - ./.nr-diagnose-data:/root/.nr-diagnose
+    networks:
+      - nr-test
+    # Override the Dockerfile CMD so we can override at `docker compose run` time
+    entrypoint: ["nr-diagnose"]
+
+  # Long-running OTel collector — what nr-diagnose is "verifying" the recipe for.
+  # Bring this up with `docker compose -f docker-compose.test.yml up -d collector`.
+  # Logs go to stdout — `docker compose logs -f collector` will show metric exports.
+  collector:
+    image: otel/opentelemetry-collector-contrib:0.127.0
+    container_name: nr-test-collector
+    env_file: .env  # picks up NEW_RELIC_LICENSE_KEY if set there
+    environment:
+      ORACLE_USERNAME: otel
+      ORACLE_PASSWORD: otelpass
+      ORACLE_HOST: oracle
+      ORACLE_PORT: "1521"
+      ORACLE_SERVICE: FREEPDB1
+      NEW_RELIC_OTLP_ENDPOINT: https://staging-otlp.nr-data.net
+      # NEW_RELIC_LICENSE_KEY must come from .env or your shell env.
+    depends_on:
+      oracle:
+        condition: service_healthy
+    volumes:
+      - ./agents/otel-oracledbreceiver/collector-config.yaml:/etc/otelcol-contrib/config.yaml:ro
+    command: ["--config=/etc/otelcol-contrib/config.yaml"]
+    networks:
+      - nr-test
+    restart: unless-stopped
+
+networks:
+  nr-test:
+    driver: bridge

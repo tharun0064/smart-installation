@@ -1,5 +1,8 @@
 """Terminal UI - Rich-based output for step progress and remediation display."""
 
+import getpass
+from typing import List, Optional, Tuple
+
 from rich.console import Console
 from rich.panel import Panel
 from rich.prompt import Prompt
@@ -120,27 +123,37 @@ def show_remediation(payload: RemediationPayload, from_runbook: bool = False, re
         console.print(f"    [bold]{payload.remediation_command}[/bold]\n")
 
 
-def prompt_action(is_destructive: bool = False) -> str:
+def prompt_action(is_destructive: bool = False, bad_inputs: Optional[List[str]] = None) -> str:
     """Prompt user for action on remediation.
 
     Returns:
-        'y'     - execute the fix automatically
-        'n'     - skip this step
-        'q'     - quit execution
-        'retry' - user fixed it manually, retry the step
+        'y'      - execute the fix automatically
+        'update' - re-prompt for the bad inputs and retry (only when bad_inputs is non-empty)
+        'n'      - skip this step
+        'q'      - quit execution
+        'retry'  - user fixed it manually, retry the step
     """
+    bad_inputs = bad_inputs or []
+
     if is_destructive:
         console.print("  [yellow]\u26a0  This command may modify your system![/yellow]")
 
-    console.print("  [green]\\[Y]es[/green]       - run this fix for me")
-    console.print("  [cyan]\\[r]etry[/cyan]     - I fixed it myself, retry the step")
-    console.print("  [dim]\\[n]o (skip)[/dim] - skip this step and continue")
-    console.print("  [dim]\\[q]uit[/dim]      - stop execution")
+    if bad_inputs:
+        names = ", ".join(f"[cyan]{n}[/cyan]" for n in bad_inputs)
+        console.print(f"  [bold green]\\[u]pdate[/bold green]      - re-enter {names} and retry  [dim](recommended)[/dim]")
 
-    response = Prompt.ask("\n  What would you like to do?", default="y")
+    console.print("  [green]\\[Y]es[/green]        - run this fix for me")
+    console.print("  [cyan]\\[r]etry[/cyan]      - I fixed it myself, retry the step")
+    console.print("  [dim]\\[n]o (skip)[/dim]  - skip this step and continue")
+    console.print("  [dim]\\[q]uit[/dim]       - stop execution")
+
+    default = "u" if bad_inputs else "y"
+    response = Prompt.ask("\n  What would you like to do?", default=default)
     response = response.strip().lower()
 
-    if response in ("y", "yes"):
+    if response in ("u", "update") and bad_inputs:
+        return "update"
+    elif response in ("y", "yes"):
         return "y"
     elif response in ("r", "retry", "fixed", "done"):
         return "retry"
@@ -150,12 +163,44 @@ def prompt_action(is_destructive: bool = False) -> str:
         return "n"
 
 
+def rerender_start(updated_inputs: List[str]) -> None:
+    """Header before re-running install steps that depend on updated inputs."""
+    names = ", ".join(f"[cyan]{n}[/cyan]" for n in updated_inputs)
+    console.print(f"\n  [bold]Re-rendering install state with new {names}...[/bold]")
+
+
+def rerender_step(idx: int, total: int, label: str, success: bool) -> None:
+    """Show one step being re-executed during the update flow."""
+    icon = "[green]✓[/green]" if success else "[red]✗[/red]"
+    console.print(f"  {icon} re-ran step {idx}/{total}: [dim]{label}[/dim]")
+
+
 def fix_applied(success: bool) -> None:
-    """Show fix result."""
+    """Show fix result for the suggested-command path."""
     if success:
-        console.print("  [green]\u2713[/green] Fix applied successfully. Re-running step...\n")
+        console.print("  [green]\u2713[/green] Fix applied. Step now passes.\n")
     else:
         console.print("  [red]\u2717[/red] Fix did not resolve the issue.\n")
+
+
+def update_succeeded(step_label: str, updated_inputs: List[str]) -> None:
+    """Show explicit confirmation that the update flow's retry worked."""
+    names = ", ".join(f"[cyan]{n}[/cyan]" for n in updated_inputs)
+    console.print(
+        f"\n  [green]\u2713[/green] [bold]Connectivity confirmed.[/bold] "
+        f"[dim]\u2014 step retried with new {names} and passed.[/dim]\n"
+    )
+
+
+def update_failed(step_label: str, updated_inputs: List[str], stderr: str = "") -> None:
+    """Show explicit failure when the retry still fails after updating inputs."""
+    names = ", ".join(f"[cyan]{n}[/cyan]" for n in updated_inputs)
+    console.print(
+        f"\n  [red]\u2717[/red] [bold]Step still failing after updating {names}.[/bold]"
+    )
+    if stderr:
+        console.print(f"  [red]{stderr.strip()[:300]}[/red]")
+    console.print("  [dim]The new value(s) were saved, but something else is still wrong.[/dim]\n")
 
 
 def summary(total: int, passed: int, failed: int, skipped: int) -> None:
@@ -214,6 +259,88 @@ def show_completion_summary(result, agent_info=None) -> None:
                           (agent_info.manifest.name if agent_info else "<name>"))
 
     console.print(f"{'═' * 60}\n")
+
+
+def show_required_inputs(rows: List[Tuple[str, str, bool, str]]) -> None:
+    """Print the list of inputs we'll prompt for. Each row: (name, description, secret, saved_value)."""
+    if not rows:
+        return
+    console.print(f"\n{'─' * 60}")
+    console.print("[bold]Configuration inputs[/bold]")
+    console.print("[dim]These values will be substituted into the install script.[/dim]\n")
+    for name, description, secret, saved in rows:
+        tag = " [yellow](secret)[/yellow]" if secret else ""
+        status = " [green]✓ saved[/green]" if saved else ""
+        line = f"  [cyan]{name}[/cyan]{tag}{status}"
+        if description:
+            line += f"  [dim]— {description}[/dim]"
+        console.print(line)
+
+
+def prompt_input(name: str, description: str = "", secret: bool = False, default: str = "") -> str:
+    """Prompt for a single input. Masks secrets via getpass."""
+    label = f"  [cyan]{name}[/cyan]"
+    if description:
+        label += f" [dim]({description})[/dim]"
+    if default and not secret:
+        label += f" [dim]\\[{default}][/dim]"
+    elif default and secret:
+        label += " [dim]\\[saved, press Enter to keep][/dim]"
+    console.print(label)
+
+    if secret:
+        try:
+            value = getpass.getpass("    > ")
+        except (EOFError, KeyboardInterrupt):
+            value = ""
+    else:
+        try:
+            value = input("    > ")
+        except (EOFError, KeyboardInterrupt):
+            value = ""
+
+    return value.strip()
+
+
+def show_config_saved(path: str) -> None:
+    """Confirm that inputs were saved."""
+    console.print(f"\n  [green]✓[/green] Saved inputs to [dim]{path}[/dim]")
+
+
+def validation_start(total: int) -> None:
+    """Header before the post-install validation pass."""
+    console.print(f"\n{'═' * 60}")
+    console.print(f"[bold]Post-install validation[/bold] [dim]({total} checks)[/dim]")
+    console.print(f"{'═' * 60}")
+
+
+def validation_check_start(idx: int, total: int, command: str) -> None:
+    """Show a validation check starting."""
+    console.print(f"\n  [blue]⟳[/blue] [bold]\\[{idx}/{total}][/bold] [dim]{command}[/dim]")
+
+
+def validation_check_pass(command: str) -> None:
+    """Show a validation check passing."""
+    console.print(f"  [green]✓[/green] [dim]{command}[/dim]")
+
+
+def validation_check_fail(command: str, stderr: str) -> None:
+    """Show a validation check failing."""
+    console.print(f"  [red]✗ FAILED[/red] [dim]{command}[/dim]")
+    if stderr:
+        console.print(f"  [red]{stderr.strip()[:300]}[/red]")
+
+
+def validation_summary(passed: int, failed: int) -> None:
+    """End-of-validation summary."""
+    console.print(f"\n{'─' * 60}")
+    if failed == 0:
+        console.print(f"  [bold green]✓ All {passed} validation checks passed.[/bold green]")
+    else:
+        console.print(
+            f"  [green]{passed} passed[/green], "
+            f"[red]{failed} failed[/red]"
+        )
 
 
 def _truncate_command(command: str, max_len: int = 80) -> str:

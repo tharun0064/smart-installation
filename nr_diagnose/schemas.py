@@ -5,6 +5,15 @@ from typing import List, Optional
 
 
 @dataclass
+class RequiredInput:
+    """A user-supplied value needed by the install script (e.g. credentials, hostnames)."""
+    name: str = ""
+    description: str = ""
+    secret: bool = False
+    default: str = ""
+
+
+@dataclass
 class AgentManifest:
     name: str = ""
     display_name: str = ""
@@ -13,6 +22,7 @@ class AgentManifest:
     ports: List[int] = field(default_factory=list)
     services: List[str] = field(default_factory=list)
     prerequisites: List[str] = field(default_factory=list)
+    required_inputs: List[RequiredInput] = field(default_factory=list)
 
 
 @dataclass
@@ -35,6 +45,9 @@ class RemediationPayload:
     human_explanation: str = ""
     remediation_command: str = ""
     is_destructive: bool = False
+    # Names of user-supplied inputs (from manifest required_inputs) that caused this failure.
+    # When set, the runner offers an [u]pdate option that re-prompts and re-renders affected steps.
+    bad_inputs: List[str] = field(default_factory=list)
 
 
 @dataclass

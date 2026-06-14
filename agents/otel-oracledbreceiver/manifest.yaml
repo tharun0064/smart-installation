@@ -13,3 +13,23 @@ prerequisites:
   - "Database user with SELECT privileges on V$ views"
   - "New Relic License Key"
   - "Network connectivity to otlp.nr-data.net"
+required_inputs:
+  - name: ORACLE_HOST
+    description: "Oracle DB hostname or IP"
+    default: "localhost"
+  - name: ORACLE_PORT
+    description: "Oracle listener port"
+    default: "1521"
+  - name: ORACLE_USERNAME
+    description: "DB user with SELECT on V$ views"
+  - name: ORACLE_PASSWORD
+    description: "Password for the DB user"
+    secret: true
+  - name: ORACLE_SERVICE
+    description: "Oracle service name (e.g. ORCLPDB1)"
+  - name: NEW_RELIC_LICENSE_KEY
+    description: "New Relic ingest license key"
+    secret: true
+  - name: NEW_RELIC_OTLP_ENDPOINT
+    description: "New Relic OTLP HTTP endpoint (US: https://otlp.nr-data.net  EU: https://otlp.eu01.nr-data.net  Staging: https://staging-otlp.nr-data.net)"
+    default: "https://otlp.nr-data.net"

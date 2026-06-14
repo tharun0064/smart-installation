@@ -51,7 +51,7 @@ processors:
 
 exporters:
   otlphttp:
-    endpoint: https://otlp.nr-data.net
+    endpoint: ${NEW_RELIC_OTLP_ENDPOINT}
     headers:
       api-key: "${NEW_RELIC_LICENSE_KEY}"
 
@@ -69,8 +69,8 @@ EOF
 # Step 10: Validate the collector configuration
 /usr/local/bin/otelcol-contrib validate --config=/etc/otelcol-contrib/config.yaml
 
-# Step 11: Start the collector and verify no errors (15 second test)
-timeout 15 /usr/local/bin/otelcol-contrib --config=/etc/otelcol-contrib/config.yaml > /tmp/otel-test.log 2>&1; OTEL_EXIT=$?; cat /tmp/otel-test.log | tail -30; if grep -qi "error\|ORA-\|failed" /tmp/otel-test.log; then echo "ERROR: Collector reported errors during test run"; exit 1; fi; if [ $OTEL_EXIT -ne 0 ] && [ $OTEL_EXIT -ne 124 ]; then exit $OTEL_EXIT; fi
+# Step 11: Start the collector and verify no errors (2-minute smoke test — long enough for ~2 export cycles at collection_interval: 60s)
+timeout 120 /usr/local/bin/otelcol-contrib --config=/etc/otelcol-contrib/config.yaml > /tmp/otel-test.log 2>&1; OTEL_EXIT=$?; cat /tmp/otel-test.log | tail -30; if grep -qi "error\|ORA-\|failed" /tmp/otel-test.log; then echo "ERROR: Collector reported errors during test run"; exit 1; fi; if [ $OTEL_EXIT -ne 0 ] && [ $OTEL_EXIT -ne 124 ]; then exit $OTEL_EXIT; fi
 
 # Step 12: Installation verification
 echo "OpenTelemetry Oracle DB Receiver installation complete"

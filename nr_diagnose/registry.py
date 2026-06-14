@@ -7,7 +7,7 @@ from typing import List, Optional
 
 import yaml
 
-from .schemas import AgentManifest, DiagnosticHints, RunbookIndex, RunbookIndexEntry
+from .schemas import AgentManifest, DiagnosticHints, RequiredInput, RunbookIndex, RunbookIndexEntry
 
 
 @dataclass
@@ -42,6 +42,15 @@ def load_agent(agent_dir: str) -> Agent:
         ports=manifest_data.get("ports", []),
         services=manifest_data.get("services", []),
         prerequisites=manifest_data.get("prerequisites", []),
+        required_inputs=[
+            RequiredInput(
+                name=ri.get("name", ""),
+                description=ri.get("description", ""),
+                secret=ri.get("secret", False),
+                default=ri.get("default", ""),
+            )
+            for ri in (manifest_data.get("required_inputs") or [])
+        ],
     )
 
     # Load install script

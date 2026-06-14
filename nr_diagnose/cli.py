@@ -12,10 +12,11 @@ import typer
 from . import config as cfg_module
 from .agent import LLMAgent
 from .generator import generate_agent_files, has_real_content, is_template
+from .inputs import collect as collect_inputs
 from .parser import parse_script
 from .registry import find_agent_dir, list_agents, load_agent
 from .runbook import Manager as RunbookManager
-from .runner import Options, run
+from .runner import Options, run, validate
 
 app = typer.Typer(
     name="nr-diagnose",
@@ -166,8 +167,19 @@ def run_cmd(
     if not dry_run:
         llm_agent = LLMAgent(config)
 
+    # Collect inputs (credentials, hostnames) referenced by the script
+    env_vars = {}
+    if not dry_run:
+        env_vars = collect_inputs(steps, agent_info)
+
     # Run
-    result = run(steps, agent_info, llm_agent, rb_mgr, Options(verbose=verbose, dry_run=dry_run))
+    opts = Options(verbose=verbose, dry_run=dry_run)
+    result = run(steps, agent_info, llm_agent, rb_mgr, opts, env_vars=env_vars)
+
+    # Post-install validation pass — always run if priority_commands are defined,
+    # even when install steps failed (validation is most useful then).
+    if not dry_run and agent_info and agent_info.hints.priority_commands:
+        validate(agent_info, llm_agent, rb_mgr, opts, env_vars=env_vars)
 
     if result.failed > 0:
         raise typer.Exit(1)
