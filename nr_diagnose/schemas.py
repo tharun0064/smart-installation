@@ -72,3 +72,31 @@ class RunbookIndexEntry:
 class RunbookIndex:
     """Lookup table mapping error patterns to entry files."""
     entries: List[RunbookIndexEntry] = field(default_factory=list)
+
+
+@dataclass
+class ConfigVar:
+    """A configuration variable extracted from a config template."""
+    name: str = ""
+    current_value: str = ""
+    required: bool = True
+    validation_type: str = "string"  # host, port, license_key, password, string
+
+
+@dataclass
+class PreflightResult:
+    """Result of the config validation phase."""
+    passed: bool = False
+    vars_validated: dict = field(default_factory=dict)
+    connectivity_results: dict = field(default_factory=dict)
+    errors: List[str] = field(default_factory=list)
+
+
+@dataclass
+class LogWatchResult:
+    """Result of post-service-start log monitoring."""
+    clean: bool = True
+    errors_found: List[str] = field(default_factory=list)
+    error_categories: List[str] = field(default_factory=list)
+    full_output: str = ""
+    duration_seconds: int = 15

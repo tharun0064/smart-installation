@@ -19,7 +19,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY pyproject.toml requirements.txt ./
 COPY nr_diagnose/ ./nr_diagnose/
 COPY agents/ ./agents/
-COPY .env ./.env
+COPY .env* ./
 
 # Install the package
 RUN pip install --no-cache-dir -e .

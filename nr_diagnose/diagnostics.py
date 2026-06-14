@@ -79,3 +79,23 @@ def run_all(commands: List[str]) -> Dict[str, str]:
         else:
             results[cmd] = output
     return results
+
+
+def check_connectivity(host: str, port: int) -> Tuple[bool, str]:
+    """Run nc -zv host port and return (reachable, output)."""
+    cmd = f"nc -zv {host} {port}"
+    output, error = run_diagnostic(cmd)
+    if error:
+        return False, output
+    reachable = any(kw in output.lower() for kw in ("succeeded", "open", "connected"))
+    return reachable, output
+
+
+def check_dns(host: str) -> Tuple[bool, str]:
+    """Run nslookup host and return (resolves, output)."""
+    cmd = f"nslookup {host}"
+    output, error = run_diagnostic(cmd)
+    if error:
+        return False, output
+    resolves = "nxdomain" not in output.lower() and "can't find" not in output.lower()
+    return resolves, output

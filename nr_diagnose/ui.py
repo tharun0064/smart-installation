@@ -216,6 +216,75 @@ def show_completion_summary(result, agent_info=None) -> None:
     console.print(f"{'═' * 60}\n")
 
 
+def show_preflight_start(config_path: str) -> None:
+    """Show config validation starting."""
+    console.print(f"\n  [blue]⚙[/blue] [bold]Pre-flight config validation[/bold] for {config_path}")
+
+
+def prompt_config_var(var_name: str, current_value: str, validation_type: str) -> str:
+    """Prompt user to confirm/provide a config variable."""
+    if validation_type == "password" and current_value:
+        display = current_value[:3] + "***"
+    else:
+        display = current_value or "[not set]"
+    return Prompt.ask(f"    {var_name} ({display})", default=current_value)
+
+
+def show_preflight_check(description: str, passed: bool) -> None:
+    """Show pass/fail for a single preflight check."""
+    mark = "[green]✓[/green]" if passed else "[red]✗[/red]"
+    console.print(f"    {mark} {description}")
+
+
+def show_preflight_summary(result) -> None:
+    """Summary of all preflight checks."""
+    if result.passed:
+        console.print(f"  [green]✓[/green] All pre-flight checks passed")
+    else:
+        console.print(f"  [red]✗[/red] {len(result.errors)} pre-flight check(s) failed:")
+        for err in result.errors:
+            console.print(f"    [red]• {err}[/red]")
+
+
+def prompt_preflight_failure() -> str:
+    """When preflight fails. Returns 'f', 's', or 'q'."""
+    response = Prompt.ask(
+        "\n  [green]\\[f]ix[/green] and re-check / [dim]\\[s]kip[/dim] / [dim]\\[q]uit[/dim]",
+        default="f",
+    )
+    r = response.strip().lower()
+    if r in ("f", "fix"):
+        return "f"
+    elif r in ("q", "quit"):
+        return "q"
+    return "s"
+
+
+def show_log_monitoring(service_id: str, duration: int = 15) -> None:
+    """Show log monitoring starting."""
+    console.print(f"\n  [blue]⏱[/blue] Monitoring [bold]{service_id}[/bold] logs for {duration}s...")
+
+
+def show_log_errors(errors_found: list, error_categories: list) -> None:
+    """Display detected errors from log monitoring."""
+    console.print(f"\n  [red]⚠[/red] [bold]Errors detected in service logs:[/bold]")
+    for error in errors_found[:5]:
+        console.print(f"    [red]{error.strip()[:120]}[/red]")
+    if error_categories:
+        cats = list(set(error_categories))
+        console.print(f"  [dim]Categories: {', '.join(cats)}[/dim]")
+
+
+def show_log_clean(duration: int) -> None:
+    """Show logs were clean."""
+    console.print(f"  [green]✓[/green] Logs clean for {duration}s — proceeding")
+
+
+def show_retry_iteration(iteration: int) -> None:
+    """Show retry loop iteration number."""
+    console.print(f"\n  [yellow]↻[/yellow] [bold]Diagnosis attempt #{iteration}[/bold]")
+
+
 def _truncate_command(command: str, max_len: int = 80) -> str:
     """Truncate a command for display."""
     if "\n" in command:

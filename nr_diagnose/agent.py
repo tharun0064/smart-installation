@@ -26,6 +26,27 @@ You MUST respond with ONLY a valid JSON object in this exact format:
 {"hypothesis": "your hypothesis", "diagnostic_commands": ["cmd1", "cmd2"]}
 """
 
+SYSTEM_PROMPT_LOG_DIAGNOSIS = """You are analyzing service log output after a service was started.
+The logs contain errors that prevent the service from functioning correctly.
+
+You receive the log output, the service configuration context, and known failure modes.
+
+Your job: identify the root cause from the log errors and suggest a single concrete fix.
+
+Common patterns:
+- ORA-01017: wrong database credentials -> update credentials in config file
+- connection refused: target not running or wrong host/port -> check connectivity
+- permission denied: file permissions or missing database GRANT -> fix permissions
+- FATAL/panic: configuration syntax errors -> fix config file
+- invalid username/password: wrong credentials in config -> update config with correct creds
+
+Keep explanations punchy, empathetic, and developer-centric.
+Tell the user exactly which file to edit and what value to change.
+
+You MUST respond with ONLY a valid JSON object in this exact format:
+{"root_cause": "...", "human_explanation": "...", "remediation_command": "...", "is_destructive": false}
+"""
+
 SYSTEM_PROMPT_RESOLVER = """You are the Remediation Engine. You receive:
 1. The original failed command and its error output
 2. The raw terminal output from the diagnostic commands you previously requested
@@ -73,6 +94,26 @@ class LLMAgent:
 
         response = self._chat(SYSTEM_PROMPT_RESOLVER, user_prompt)
 
+        data = json.loads(_extract_json(response))
+        return RemediationPayload(
+            root_cause=data.get("root_cause", ""),
+            human_explanation=data.get("human_explanation", ""),
+            remediation_command=data.get("remediation_command", ""),
+            is_destructive=data.get("is_destructive", False),
+        )
+
+    def diagnose_log_errors(
+        self, log_output: str, config_context: str, agent_info: Optional[RegistryAgent]
+    ) -> RemediationPayload:
+        """Diagnose errors found in service logs — goes straight to remediation."""
+        parts = [f"## Service Log Output\n```\n{log_output[:3000]}\n```\n"]
+        if config_context:
+            parts.append(f"\n## Configuration Context\n{config_context}")
+        if agent_info and agent_info.knowledge.common_failures:
+            parts.append(f"\n## Known Failure Modes\n{agent_info.knowledge.common_failures}")
+
+        user_prompt = scrub("\n".join(parts))
+        response = self._chat(SYSTEM_PROMPT_LOG_DIAGNOSIS, user_prompt)
         data = json.loads(_extract_json(response))
         return RemediationPayload(
             root_cause=data.get("root_cause", ""),

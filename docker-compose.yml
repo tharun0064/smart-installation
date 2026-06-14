@@ -5,3 +5,10 @@ services:
     stdin_open: true
     tty: true
     network_mode: host
+    environment:
+      - ORACLE_HOST=${ORACLE_HOST:-localhost}
+      - ORACLE_PORT=${ORACLE_PORT:-1521}
+      - ORACLE_USERNAME=${ORACLE_USERNAME:-}
+      - ORACLE_PASSWORD=${ORACLE_PASSWORD:-}
+      - ORACLE_SERVICE=${ORACLE_SERVICE:-}
+      - NEW_RELIC_LICENSE_KEY=${NEW_RELIC_LICENSE_KEY:-}
