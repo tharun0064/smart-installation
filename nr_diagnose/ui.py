@@ -1,5 +1,8 @@
 """Terminal UI - Rich-based output for step progress and remediation display."""
 
+import getpass
+from typing import List, Tuple
+
 from rich.console import Console
 from rich.panel import Panel
 from rich.prompt import Prompt
@@ -214,6 +217,103 @@ def show_completion_summary(result, agent_info=None) -> None:
                           (agent_info.manifest.name if agent_info else "<name>"))
 
     console.print(f"{'═' * 60}\n")
+
+
+def show_required_inputs(rows: List[Tuple[str, str, bool, str]]) -> None:
+    """Print the list of inputs we'll prompt for. Each row: (name, description, secret, saved_value)."""
+    if not rows:
+        return
+    console.print(f"\n{'─' * 60}")
+    console.print("[bold]Configuration inputs[/bold]")
+    console.print("[dim]These values will be substituted into the install script.[/dim]\n")
+    for name, description, secret, saved in rows:
+        tag = " [yellow](secret)[/yellow]" if secret else ""
+        status = " [green]✓ saved[/green]" if saved else ""
+        line = f"  [cyan]{name}[/cyan]{tag}{status}"
+        if description:
+            line += f"  [dim]— {description}[/dim]"
+        console.print(line)
+
+
+def prompt_use_saved_config() -> bool:
+    """Ask whether to reuse previously-saved values."""
+    response = Prompt.ask(
+        "\n  Saved values found. Use them? [green]\\[Y]es[/green] / [dim]\\[n]o, re-prompt[/dim]",
+        default="y",
+    )
+    return response.strip().lower() in ("y", "yes", "")
+
+
+def prompt_input(name: str, description: str = "", secret: bool = False, default: str = "") -> str:
+    """Prompt for a single input. Masks secrets via getpass."""
+    label = f"  [cyan]{name}[/cyan]"
+    if description:
+        label += f" [dim]({description})[/dim]"
+    if default and not secret:
+        label += f" [dim]\\[{default}][/dim]"
+    elif default and secret:
+        label += " [dim]\\[saved, press Enter to keep][/dim]"
+    console.print(label)
+
+    if secret:
+        try:
+            value = getpass.getpass("    > ")
+        except (EOFError, KeyboardInterrupt):
+            value = ""
+    else:
+        try:
+            value = input("    > ")
+        except (EOFError, KeyboardInterrupt):
+            value = ""
+
+    return value.strip()
+
+
+def show_input_reused(name: str, secret: bool, value: str) -> None:
+    """Confirm that a saved input was reused."""
+    shown = "*" * 8 if secret else value
+    console.print(f"  [green]✓[/green] [cyan]{name}[/cyan] = [dim]{shown}[/dim]")
+
+
+def show_config_saved(path: str) -> None:
+    """Confirm that inputs were saved."""
+    console.print(f"\n  [green]✓[/green] Saved inputs to [dim]{path}[/dim]")
+
+
+def validation_start(total: int) -> None:
+    """Header before the post-install validation pass."""
+    console.print(f"\n{'═' * 60}")
+    console.print(f"[bold]Post-install validation[/bold] [dim]({total} checks)[/dim]")
+    console.print(f"{'═' * 60}")
+
+
+def validation_check_start(idx: int, total: int, command: str) -> None:
+    """Show a validation check starting."""
+    console.print(f"\n  [blue]⟳[/blue] [bold]\\[{idx}/{total}][/bold] [dim]{command}[/dim]")
+
+
+def validation_check_pass(command: str) -> None:
+    """Show a validation check passing."""
+    console.print(f"  [green]✓[/green] [dim]{command}[/dim]")
+
+
+def validation_check_fail(command: str, stderr: str) -> None:
+    """Show a validation check failing."""
+    console.print(f"  [red]✗ FAILED[/red] [dim]{command}[/dim]")
+    if stderr:
+        console.print(f"  [red]{stderr.strip()[:300]}[/red]")
+
+
+def validation_summary(passed: int, failed: int) -> None:
+    """End-of-validation summary."""
+    console.print(f"\n{'─' * 60}")
+    if failed == 0:
+        console.print(f"  [bold green]✓ All {passed} validation checks passed.[/bold green]")
+    else:
+        console.print(
+            f"  [green]{passed} passed[/green], "
+            f"[red]{failed} failed[/red]"
+        )
 
 
 def _truncate_command(command: str, max_len: int = 80) -> str:

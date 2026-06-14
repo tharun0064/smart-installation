@@ -1,0 +1,43 @@
+# Long-running collector config used by the `collector` service in docker-compose.test.yml.
+# Mirrors the heredoc in install.sh, but uses OTel's runtime env-var substitution
+# (${env:VAR}) instead of bash-time substitution, so the same file works without re-rendering.
+
+receivers:
+  oracledb:
+    datasource: "oracle://${env:ORACLE_USERNAME}:${env:ORACLE_PASSWORD}@${env:ORACLE_HOST}:${env:ORACLE_PORT}/${env:ORACLE_SERVICE}"
+    collection_interval: 30s
+    metrics:
+      oracledb.cpu_time:
+        enabled: true
+      oracledb.sessions.usage:
+        enabled: true
+      oracledb.tablespace_size.usage:
+        enabled: true
+
+processors:
+  batch:
+    timeout: 10s
+  resource:
+    attributes:
+      - key: service.name
+        value: oracledb-monitoring
+        action: upsert
+
+exporters:
+  otlphttp:
+    endpoint: ${env:NEW_RELIC_OTLP_ENDPOINT}
+    headers:
+      api-key: "${env:NEW_RELIC_LICENSE_KEY}"
+  # Logs every batch as it's emitted — makes "is data flowing?" trivially visible in `docker compose logs`.
+  debug:
+    verbosity: basic
+
+service:
+  pipelines:
+    metrics:
+      receivers: [oracledb]
+      processors: [batch, resource]
+      exporters: [otlphttp, debug]
+  telemetry:
+    logs:
+      level: info

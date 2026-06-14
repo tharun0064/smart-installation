@@ -35,7 +35,7 @@ receivers:
     metrics:
       oracledb.cpu_time:
         enabled: true
-      oracledb.sessions.usage:
+      oracledb.sessions.uno thsage:
         enabled: true
       oracledb.tablespace_size.usage:
         enabled: true
@@ -51,7 +51,7 @@ processors:
 
 exporters:
   otlphttp:
-    endpoint: https://otlp.nr-data.net
+    endpoint: ${NEW_RELIC_OTLP_ENDPOINT}
     headers:
       api-key: "${NEW_RELIC_LICENSE_KEY}"
 

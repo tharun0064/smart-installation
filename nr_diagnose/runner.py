@@ -1,9 +1,10 @@
 """Main execution runner - executes steps with AI-powered failure handling."""
 
+import os
 import re
 import subprocess
 from dataclasses import dataclass, field
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 from .agent import LLMAgent
 from .context import OSContext, collect
@@ -121,9 +122,11 @@ def run(
     llm_agent: Optional[LLMAgent],
     rb_mgr: Optional[RunbookManager],
     opts: Options,
+    env_vars: Optional[Dict[str, str]] = None,
 ) -> Result:
     """Execute all steps with AI-powered failure handling."""
     result = Result(total=len(steps))
+    env_vars = env_vars or {}
 
     if opts.dry_run:
         ui.console.print("\n[bold]Dry-run mode:[/bold] showing parsed steps without executing\n")
@@ -163,7 +166,7 @@ def run(
             # Auto-run safe commands silently
             ui.console.print("  [dim]auto-running...[/dim]")
 
-        step_result = _execute_step(step_num, step.command)
+        step_result = _execute_step(step_num, step.command, env_vars)
 
         if step_result.success:
             ui.step_success(step_num, len(steps), step.command, step.description)
@@ -242,6 +245,7 @@ def run(
                 fix_result = subprocess.run(
                     ["bash", "-c", remediation.remediation_command],
                     capture_output=True, text=True, timeout=60,
+                    env=_build_subprocess_env(env_vars),
                 )
                 if opts.verbose and fix_result.stdout:
                     print(f"  Fix output: {fix_result.stdout}")
@@ -249,7 +253,7 @@ def run(
                 pass
 
             # Re-run the failed step
-            retry_result = _execute_step(step_num, step.command)
+            retry_result = _execute_step(step_num, step.command, env_vars)
             if retry_result.success:
                 ui.fix_applied(True)
                 ui.step_success(step_num, len(steps), step.command, step.description)
@@ -270,7 +274,7 @@ def run(
 
         elif choice == "retry":
             # User fixed it manually — just retry the step
-            retry_result = _execute_step(step_num, step.command)
+            retry_result = _execute_step(step_num, step.command, env_vars)
             if retry_result.success:
                 ui.fix_applied(True)
                 ui.step_success(step_num, len(steps), step.command, step.description)
@@ -291,12 +295,200 @@ def run(
     return result
 
 
-def _execute_step(step_num: int, command: str) -> StepResult:
+def validate(
+    agent_info: Optional[RegistryAgent],
+    llm_agent: Optional[LLMAgent],
+    rb_mgr: Optional[RunbookManager],
+    opts: Options,
+    env_vars: Optional[Dict[str, str]] = None,
+    max_rounds: int = 3,
+) -> Result:
+    """Run priority_commands as post-install validation; on failure, reuse runbook→LLM→prompt path.
+
+    Loops up to max_rounds times so a fix that resolves one check can re-run the rest.
+    """
+    env_vars = env_vars or {}
+    if not agent_info or not agent_info.hints.priority_commands:
+        return Result()
+
+    commands = list(agent_info.hints.priority_commands)
+    if opts.dry_run:
+        ui.console.print("\n[bold]Dry-run:[/bold] would run validation checks:")
+        for c in commands:
+            ui.console.print(f"  [dim]$[/dim] {c}")
+        return Result(total=len(commands))
+
+    os_ctx = collect()
+    last = Result(total=len(commands))
+
+    for round_num in range(1, max_rounds + 1):
+        ui.validation_start(len(commands))
+        last = Result(total=len(commands))
+        any_failed = False
+
+        for idx, command in enumerate(commands, 1):
+            ui.validation_check_start(idx, len(commands), command)
+            check_result = _execute_step(idx, command, env_vars)
+
+            if check_result.success:
+                ui.validation_check_pass(command)
+                last.passed += 1
+                continue
+
+            any_failed = True
+            last.failed += 1
+            ui.validation_check_fail(command, check_result.stderr)
+
+            outcome = _handle_failure(
+                step_num=idx,
+                command=command,
+                description=f"validation: {command}",
+                step_result=check_result,
+                agent_info=agent_info,
+                llm_agent=llm_agent,
+                rb_mgr=rb_mgr,
+                opts=opts,
+                env_vars=env_vars,
+                os_ctx=os_ctx,
+                step_label=f"validation: {command}",
+            )
+
+            if outcome == "quit":
+                ui.validation_summary(last.passed, last.failed)
+                return last
+            if outcome == "fixed":
+                last.passed += 1
+                last.failed -= 1
+
+        ui.validation_summary(last.passed, last.failed)
+        if not any_failed:
+            return last
+        if round_num < max_rounds and last.failed > 0:
+            ui.console.print(f"\n  [dim]Re-running validation (round {round_num + 1}/{max_rounds})...[/dim]")
+
+    return last
+
+
+def _handle_failure(
+    step_num: int,
+    command: str,
+    description: str,
+    step_result: StepResult,
+    agent_info: Optional[RegistryAgent],
+    llm_agent: Optional[LLMAgent],
+    rb_mgr: Optional[RunbookManager],
+    opts: Options,
+    env_vars: Dict[str, str],
+    os_ctx: OSContext,
+    step_label: str,
+) -> str:
+    """Shared failure-handling: runbook → LLM → prompt → fix → save.
+
+    Returns one of:
+      - 'fixed'   the fix worked, retry succeeded
+      - 'unfixed' user skipped, fix failed, or no remediation available
+      - 'quit'    user asked to exit
+    """
+    error_output = step_result.stderr or step_result.stdout
+
+    remediation: Optional[RemediationPayload] = None
+    from_runbook = False
+    resolved_count = 0
+
+    if rb_mgr:
+        entry, found = rb_mgr.match(error_output)
+        if found and entry:
+            remediation = RemediationPayload(
+                root_cause=entry.root_cause,
+                human_explanation=f"This is a known issue (seen {entry.resolved_count} times before).",
+                remediation_command=entry.fix_command,
+                is_destructive=False,
+            )
+            from_runbook = True
+            resolved_count = entry.resolved_count
+
+    if remediation is None and llm_agent is not None:
+        ui.diagnosing()
+        try:
+            diag_payload = llm_agent.diagnose(step_result, os_ctx, agent_info)
+            ui.show_hypothesis(diag_payload.hypothesis)
+
+            diag_results = {}
+            if diag_payload.diagnostic_commands:
+                ui.show_diagnostic_commands(diag_payload.diagnostic_commands)
+                if ui.prompt_diagnostics_approval() == "y":
+                    ui.running_diagnostics()
+                    diag_results = run_all(diag_payload.diagnostic_commands)
+                else:
+                    ui.console.print("  [dim]Skipped diagnostics.[/dim]")
+
+            remediation = llm_agent.remediate(step_result, diag_results, agent_info)
+        except Exception as e:
+            print(f"  LLM error: {e}")
+            return "unfixed"
+
+    if remediation is None:
+        return "unfixed"
+
+    ui.show_remediation(remediation, from_runbook, resolved_count)
+    choice = ui.prompt_action(remediation.is_destructive)
+
+    if choice == "y":
+        try:
+            subprocess.run(
+                ["bash", "-c", remediation.remediation_command],
+                capture_output=True, text=True, timeout=60,
+                env=_build_subprocess_env(env_vars),
+            )
+        except Exception:
+            pass
+
+        retry_result = _execute_step(step_num, command, env_vars)
+        if retry_result.success:
+            ui.fix_applied(True)
+            if not from_runbook and rb_mgr:
+                agent_name = agent_info.manifest.name if agent_info else "unknown"
+                rb_mgr.write_entry(agent_name, RunbookEntry(
+                    error_pattern=_extract_pattern(error_output),
+                    step_failed=step_label,
+                    root_cause=remediation.root_cause,
+                    fix_command=remediation.remediation_command,
+                ))
+            return "fixed"
+        ui.fix_applied(False)
+        return "unfixed"
+
+    if choice == "retry":
+        retry_result = _execute_step(step_num, command, env_vars)
+        if retry_result.success:
+            ui.fix_applied(True)
+            return "fixed"
+        ui.fix_applied(False)
+        return "unfixed"
+
+    if choice == "q":
+        return "quit"
+
+    return "unfixed"
+
+
+def _build_subprocess_env(extra: Optional[Dict[str, str]]) -> Dict[str, str]:
+    """Merge user-supplied inputs into the parent env so heredocs interpolate them."""
+    env = os.environ.copy()
+    if extra:
+        for k, v in extra.items():
+            if v is not None:
+                env[k] = v
+    return env
+
+
+def _execute_step(step_num: int, command: str, env_vars: Optional[Dict[str, str]] = None) -> StepResult:
     """Execute a single step via bash and capture results."""
     try:
         proc = subprocess.run(
             ["bash", "-c", command],
             capture_output=True, text=True, timeout=120,
+            env=_build_subprocess_env(env_vars),
         )
         return StepResult(
             step_number=step_num,
