@@ -1,0 +1,15 @@
+name: otel-oracledbreceiver
+display_name: "OpenTelemetry Oracle Database Receiver"
+description: "Monitor Oracle Database metrics using OpenTelemetry Collector"
+target_os: linux
+ports:
+  - 1521
+  - 4317
+services:
+  - otelcol-contrib
+prerequisites:
+  - "Oracle Database 12c+ running and accessible"
+  - "Oracle listener on port 1521"
+  - "Database user with SELECT privileges on V$ views"
+  - "New Relic License Key"
+  - "Network connectivity to otlp.nr-data.net"

@@ -1,0 +1,15 @@
+priority_commands:
+  - nc -zv ${ORACLE_HOST} ${ORACLE_PORT}
+  - ping -c 2 ${ORACLE_HOST}
+  - /usr/local/bin/otelcol-contrib validate --config=/etc/otelcol-contrib/config.yaml
+  - cat /etc/otelcol-contrib/config.yaml
+  - uname -m
+  - curl -v https://otlp.nr-data.net
+
+context_hints:
+  - "If port 1521 is unreachable, check Docker network connectivity between containers"
+  - "If config validation fails, check YAML indentation (must be 2 spaces, no tabs)"
+  - "If ORA-01017 appears in logs, the Oracle username/password is wrong"
+  - "If architecture mismatch, download arm64 variant for aarch64 systems"
+  - "Collector logs show all connection attempts - check stderr output"
+  - "Environment variables in config.yaml are resolved at runtime by the collector"

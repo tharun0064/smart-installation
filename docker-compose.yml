@@ -1,0 +1,7 @@
+services:
+  nr-diagnose:
+    build: .
+    env_file: .env
+    stdin_open: true
+    tty: true
+    network_mode: host

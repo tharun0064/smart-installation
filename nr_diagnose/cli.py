@@ -11,6 +11,7 @@ import typer
 
 from . import config as cfg_module
 from .agent import LLMAgent
+from .generator import generate_agent_files, has_real_content, is_template
 from .parser import parse_script
 from .registry import find_agent_dir, list_agents, load_agent
 from .runbook import Manager as RunbookManager
@@ -71,6 +72,67 @@ def run_cmd(
         script_content = agent_info.install_script
         typer.echo(f"Agent: {agent_info.manifest.display_name}")
         typer.echo(f"Description: {agent_info.manifest.description}\n")
+
+        # Auto-generate install.sh if it's still a template and knowledge files exist
+        if is_template(script_content) and not dry_run:
+            typer.echo("Install script is empty (template). Checking knowledge files...")
+            if not has_real_content(agent_info.knowledge.references) and not has_real_content(agent_info.knowledge.prerequisites):
+                typer.echo(
+                    "Error: No documentation found. Please add content to:\n"
+                    f"  {os.path.join(agent_info.dir, 'knowledge', 'references.md')}\n"
+                    "\nPaste the installation docs there, then re-run.",
+                    err=True,
+                )
+                raise typer.Exit(1)
+
+            typer.echo("Generating install script from documentation...\n")
+            generated = generate_agent_files(config, agent_info)
+            if not generated:
+                typer.echo("Error: Failed to generate install script from docs.", err=True)
+                raise typer.Exit(1)
+
+            # Write generated files back to disk
+            agent_dir = Path(agent_info.dir)
+
+            # Write install.sh
+            install_script = generated.get("install_script", "")
+            (agent_dir / "install.sh").write_text(install_script)
+            script_content = install_script
+            typer.echo("  Generated: install.sh")
+
+            # Write manifest updates
+            if "manifest" in generated:
+                import yaml
+                m = generated["manifest"]
+                manifest_data = {
+                    "name": agent_info.manifest.name,
+                    "display_name": m.get("display_name", agent_info.manifest.name),
+                    "description": m.get("description", ""),
+                    "target_os": m.get("target_os", "linux"),
+                    "ports": m.get("ports", []),
+                    "services": m.get("services", []),
+                    "prerequisites": m.get("prerequisites", []),
+                }
+                (agent_dir / "manifest.yaml").write_text(yaml.dump(manifest_data, default_flow_style=False))
+                typer.echo("  Generated: manifest.yaml")
+                # Update display for this run
+                agent_info.manifest.display_name = m.get("display_name", agent_info.manifest.name)
+                agent_info.manifest.description = m.get("description", "")
+
+            # Write hints
+            if "hints" in generated:
+                import yaml
+                (agent_dir / "diagnostics" / "hints.yaml").write_text(
+                    yaml.dump(generated["hints"], default_flow_style=False)
+                )
+                typer.echo("  Generated: diagnostics/hints.yaml")
+
+            # Write common failures
+            if "common_failures" in generated:
+                (agent_dir / "knowledge" / "common-failures.md").write_text(generated["common_failures"])
+                typer.echo("  Generated: knowledge/common-failures.md")
+
+            typer.echo("\nFiles generated from your documentation. Proceeding with install...\n")
     elif script_path:
         # Load script from file
         try:
@@ -135,8 +197,13 @@ def new_agent_cmd(name: str = typer.Argument(..., help="Name for the new agent")
 
     agent_dir = Path(agents_dir) / name
     if agent_dir.exists():
-        typer.echo(f'Error: agent "{name}" already exists at {agent_dir}', err=True)
-        raise typer.Exit(1)
+        typer.echo(f'Agent "{name}" already exists at {agent_dir}')
+        typer.echo(f"\nTo start fresh, delete it first:")
+        typer.echo(f"  rm -rf {agent_dir}")
+        typer.echo(f"  nr-diagnose new-agent {name}")
+        typer.echo(f"\nOr to run the existing agent:")
+        typer.echo(f"  nr-diagnose run --agent {name}")
+        raise typer.Exit(0)
 
     # Create directory structure
     for subdir in ["knowledge", "diagnostics", "runbook"]:
@@ -163,11 +230,39 @@ prerequisites: []
     for filepath, content in files.items():
         (agent_dir / filepath).write_text(content)
 
-    typer.echo(f'Created agent "{name}" at {agent_dir}')
-    typer.echo("Next steps:")
-    typer.echo("  1. Edit manifest.yaml with agent metadata")
-    typer.echo("  2. Write install.sh with installation steps")
-    typer.echo("  3. Fill in knowledge/ files with domain context")
+    typer.echo(f'\nAgent "{name}" created at: {agent_dir}\n')
+    typer.echo("Files created:\n")
+    typer.echo(f"  manifest.yaml")
+    typer.echo(f"    Agent metadata (name, description, ports, services, prerequisites).")
+    typer.echo(f"    The AI uses this to understand what your agent does.\n")
+    typer.echo(f"  install.sh")
+    typer.echo(f"    The installation script. Each command becomes a step that the AI")
+    typer.echo(f"    monitors. When a step fails, the AI diagnoses it using the context")
+    typer.echo(f"    from the other files.\n")
+    typer.echo(f"  knowledge/prerequisites.md")
+    typer.echo(f"    What must be true BEFORE the install runs (e.g., DB is running,")
+    typer.echo(f"    user exists, port is open). Helps the AI check preconditions.\n")
+    typer.echo(f"  knowledge/common-failures.md")
+    typer.echo(f"    Known failure modes and their causes. This is the AI's cheat sheet —")
+    typer.echo(f"    the more you document here, the faster it diagnoses issues.\n")
+    typer.echo(f"  knowledge/references.md")
+    typer.echo(f"    Links to official docs, troubleshooting guides, etc.\n")
+    typer.echo(f"  diagnostics/hints.yaml")
+    typer.echo(f"    Diagnostic commands the AI should prioritize when investigating")
+    typer.echo(f"    failures (e.g., nc -zv localhost 1521, systemctl status ...).\n")
+    typer.echo(f"  runbook/index.yaml")
+    typer.echo(f"    Cached fixes. Starts empty. When the AI fixes something, it gets")
+    typer.echo(f"    saved here so next time the same error is fixed instantly.\n")
+    typer.echo("─" * 50)
+    typer.echo("\nNext steps:")
+    typer.echo(f"  1. Add your documentation/install guide content to:")
+    typer.echo(f"     agents/{name}/knowledge/references.md")
+    typer.echo(f"")
+    typer.echo(f"  2. Validate the parsed steps (dry run):")
+    typer.echo(f"     nr-diagnose run --agent {name} --dry-run")
+    typer.echo(f"")
+    typer.echo(f"  3. Run with AI diagnostics:")
+    typer.echo(f"     nr-diagnose run --agent {name}")
 
 
 @app.command("sync")

@@ -22,3 +22,7 @@ venv/
 
 # Local data
 .nr-diagnose/
+
+# Downloaded binaries
+otelcol-contrib
+*.tar.gz
