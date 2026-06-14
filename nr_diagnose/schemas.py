@@ -45,6 +45,9 @@ class RemediationPayload:
     human_explanation: str = ""
     remediation_command: str = ""
     is_destructive: bool = False
+    # Names of user-supplied inputs (from manifest required_inputs) that caused this failure.
+    # When set, the runner offers an [u]pdate option that re-prompts and re-renders affected steps.
+    bad_inputs: List[str] = field(default_factory=list)
 
 
 @dataclass

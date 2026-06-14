@@ -99,10 +99,8 @@ def collect(steps: List[Step], agent_info: Optional[RegistryAgent]) -> Dict[str,
         for name in sorted(required.keys())
     ])
 
-    reuse_all = False
-    if saved and any(name in saved and saved[name] for name in required):
-        reuse_all = ui.prompt_use_saved_config()
-
+    # Always prompt every input. Saved values appear as the [default] so you can hit
+    # Enter to reuse them, but nothing is ever applied silently.
     values: Dict[str, str] = {}
     for name in sorted(required.keys()):
         declared = declared_by_name.get(name)
@@ -114,11 +112,6 @@ def collect(steps: List[Step], agent_info: Optional[RegistryAgent]) -> Dict[str,
         # Env vars set in compose/CI/shell are always the most intentional for this run.
         env_value = os.environ.get(name, "")
         prefilled = env_value or saved.get(name, "") or manifest_default or script_default
-
-        if reuse_all and saved.get(name):
-            values[name] = saved[name]
-            ui.show_input_reused(name, secret, saved[name])
-            continue
 
         value = ui.prompt_input(
             name=name,

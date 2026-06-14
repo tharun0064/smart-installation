@@ -1,7 +1,7 @@
 """Terminal UI - Rich-based output for step progress and remediation display."""
 
 import getpass
-from typing import List, Tuple
+from typing import List, Optional, Tuple
 
 from rich.console import Console
 from rich.panel import Panel
@@ -123,27 +123,37 @@ def show_remediation(payload: RemediationPayload, from_runbook: bool = False, re
         console.print(f"    [bold]{payload.remediation_command}[/bold]\n")
 
 
-def prompt_action(is_destructive: bool = False) -> str:
+def prompt_action(is_destructive: bool = False, bad_inputs: Optional[List[str]] = None) -> str:
     """Prompt user for action on remediation.
 
     Returns:
-        'y'     - execute the fix automatically
-        'n'     - skip this step
-        'q'     - quit execution
-        'retry' - user fixed it manually, retry the step
+        'y'      - execute the fix automatically
+        'update' - re-prompt for the bad inputs and retry (only when bad_inputs is non-empty)
+        'n'      - skip this step
+        'q'      - quit execution
+        'retry'  - user fixed it manually, retry the step
     """
+    bad_inputs = bad_inputs or []
+
     if is_destructive:
         console.print("  [yellow]\u26a0  This command may modify your system![/yellow]")
 
-    console.print("  [green]\\[Y]es[/green]       - run this fix for me")
-    console.print("  [cyan]\\[r]etry[/cyan]     - I fixed it myself, retry the step")
-    console.print("  [dim]\\[n]o (skip)[/dim] - skip this step and continue")
-    console.print("  [dim]\\[q]uit[/dim]      - stop execution")
+    if bad_inputs:
+        names = ", ".join(f"[cyan]{n}[/cyan]" for n in bad_inputs)
+        console.print(f"  [bold green]\\[u]pdate[/bold green]      - re-enter {names} and retry  [dim](recommended)[/dim]")
 
-    response = Prompt.ask("\n  What would you like to do?", default="y")
+    console.print("  [green]\\[Y]es[/green]        - run this fix for me")
+    console.print("  [cyan]\\[r]etry[/cyan]      - I fixed it myself, retry the step")
+    console.print("  [dim]\\[n]o (skip)[/dim]  - skip this step and continue")
+    console.print("  [dim]\\[q]uit[/dim]       - stop execution")
+
+    default = "u" if bad_inputs else "y"
+    response = Prompt.ask("\n  What would you like to do?", default=default)
     response = response.strip().lower()
 
-    if response in ("y", "yes"):
+    if response in ("u", "update") and bad_inputs:
+        return "update"
+    elif response in ("y", "yes"):
         return "y"
     elif response in ("r", "retry", "fixed", "done"):
         return "retry"
@@ -153,12 +163,44 @@ def prompt_action(is_destructive: bool = False) -> str:
         return "n"
 
 
+def rerender_start(updated_inputs: List[str]) -> None:
+    """Header before re-running install steps that depend on updated inputs."""
+    names = ", ".join(f"[cyan]{n}[/cyan]" for n in updated_inputs)
+    console.print(f"\n  [bold]Re-rendering install state with new {names}...[/bold]")
+
+
+def rerender_step(idx: int, total: int, label: str, success: bool) -> None:
+    """Show one step being re-executed during the update flow."""
+    icon = "[green]✓[/green]" if success else "[red]✗[/red]"
+    console.print(f"  {icon} re-ran step {idx}/{total}: [dim]{label}[/dim]")
+
+
 def fix_applied(success: bool) -> None:
-    """Show fix result."""
+    """Show fix result for the suggested-command path."""
     if success:
-        console.print("  [green]\u2713[/green] Fix applied successfully. Re-running step...\n")
+        console.print("  [green]\u2713[/green] Fix applied. Step now passes.\n")
     else:
         console.print("  [red]\u2717[/red] Fix did not resolve the issue.\n")
+
+
+def update_succeeded(step_label: str, updated_inputs: List[str]) -> None:
+    """Show explicit confirmation that the update flow's retry worked."""
+    names = ", ".join(f"[cyan]{n}[/cyan]" for n in updated_inputs)
+    console.print(
+        f"\n  [green]\u2713[/green] [bold]Connectivity confirmed.[/bold] "
+        f"[dim]\u2014 step retried with new {names} and passed.[/dim]\n"
+    )
+
+
+def update_failed(step_label: str, updated_inputs: List[str], stderr: str = "") -> None:
+    """Show explicit failure when the retry still fails after updating inputs."""
+    names = ", ".join(f"[cyan]{n}[/cyan]" for n in updated_inputs)
+    console.print(
+        f"\n  [red]\u2717[/red] [bold]Step still failing after updating {names}.[/bold]"
+    )
+    if stderr:
+        console.print(f"  [red]{stderr.strip()[:300]}[/red]")
+    console.print("  [dim]The new value(s) were saved, but something else is still wrong.[/dim]\n")
 
 
 def summary(total: int, passed: int, failed: int, skipped: int) -> None:
@@ -235,15 +277,6 @@ def show_required_inputs(rows: List[Tuple[str, str, bool, str]]) -> None:
         console.print(line)
 
 
-def prompt_use_saved_config() -> bool:
-    """Ask whether to reuse previously-saved values."""
-    response = Prompt.ask(
-        "\n  Saved values found. Use them? [green]\\[Y]es[/green] / [dim]\\[n]o, re-prompt[/dim]",
-        default="y",
-    )
-    return response.strip().lower() in ("y", "yes", "")
-
-
 def prompt_input(name: str, description: str = "", secret: bool = False, default: str = "") -> str:
     """Prompt for a single input. Masks secrets via getpass."""
     label = f"  [cyan]{name}[/cyan]"
@@ -267,12 +300,6 @@ def prompt_input(name: str, description: str = "", secret: bool = False, default
             value = ""
 
     return value.strip()
-
-
-def show_input_reused(name: str, secret: bool, value: str) -> None:
-    """Confirm that a saved input was reused."""
-    shown = "*" * 8 if secret else value
-    console.print(f"  [green]✓[/green] [cyan]{name}[/cyan] = [dim]{shown}[/dim]")
 
 
 def show_config_saved(path: str) -> None:
