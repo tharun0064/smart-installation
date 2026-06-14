@@ -35,10 +35,13 @@ services:
       oracle:
         condition: service_healthy
     volumes:
-      # Persist saved inputs (.config.env) and learned runbook entries across runs
+      # Persist saved inputs (.config.env) and SEEDED runbook entries across runs
       - ./agents:/app/agents
       # Live-mount the source so code edits don't require rebuild
       - ./nr_diagnose:/app/nr_diagnose
+      # Persist LOCAL runbook entries (where successful AI-driven fixes are saved).
+      # Without this, ~/.nr-diagnose lives only inside the container and vanishes on --rm.
+      - ./.nr-diagnose-data:/root/.nr-diagnose
     networks:
       - nr-test
     # Override the Dockerfile CMD so we can override at `docker compose run` time

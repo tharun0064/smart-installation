@@ -42,7 +42,10 @@ class Manager:
         if not self.local_dir:
             raise RuntimeError("no local runbook directory configured")
 
-        agent_runbook = os.path.join(self.local_dir, agent_name)
+        # cli.py already constructs local_dir as <data>/runbook/<agent_name>, so don't
+        # nest another <agent_name> level here. agent_name is still used to derive the
+        # index path passed to _save_local_index below.
+        agent_runbook = self.local_dir
         os.makedirs(agent_runbook, exist_ok=True)
 
         entry.id = f"{len(self.local.entries) + 1:03d}"

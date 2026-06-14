@@ -29,3 +29,4 @@ agents/*/.config.env
 # Downloaded binaries
 otelcol-contrib
 *.tar.gz
+.nr-diagnose-data/
