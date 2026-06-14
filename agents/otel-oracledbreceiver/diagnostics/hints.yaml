@@ -1,3 +1,29 @@
+# ─── DETERMINISTIC ROUTING (overrides LLM if it drifts) ───
+# When the original failure's stderr matches any of these patterns, the runner
+# enforces that bad_inputs contains the listed names — overriding the LLM if
+# it tried to flag something else. Prevents the "ORA-01017 → endpoint is wrong"
+# misdiagnosis that prompts alone don't reliably prevent.
+error_code_routing:
+  - patterns: ["ORA-01017"]
+    bad_inputs: [ORACLE_USERNAME, ORACLE_PASSWORD]
+    root_cause: "Oracle returned ORA-01017 — the user-supplied ORACLE_USERNAME and/or ORACLE_PASSWORD is incorrect (or the account is locked/expired)."
+    explanation: "The collector connected to Oracle at the network level but credentials were rejected during authentication. Re-prompt for both username and password."
+
+  - patterns: ["ORA-12514"]
+    bad_inputs: [ORACLE_SERVICE]
+    root_cause: "Oracle listener does not recognize the service name in the connection string (ORA-12514). Common typo: FREEDB1 vs FREEPDB1, XEPDB1 vs ORCLPDB1."
+    explanation: "The listener at ORACLE_HOST:ORACLE_PORT is up, but it has no service registered with the supplied ORACLE_SERVICE name. Re-prompt for the correct service."
+
+  - patterns: ["ORA-12541", "ORA-12545"]
+    bad_inputs: [ORACLE_HOST, ORACLE_PORT]
+    root_cause: "Cannot reach the Oracle listener (ORA-1254x). Either the host doesn't resolve / has no route, or no listener is on the configured port."
+    explanation: "Re-prompt for ORACLE_HOST and ORACLE_PORT. Inside Docker compose, ORACLE_HOST should be the service name, not 'localhost'."
+
+  - patterns: ["401 Unauthorized", "403 Forbidden", "PermissionDenied", "status 401", "status 403"]
+    bad_inputs: [NEW_RELIC_LICENSE_KEY]
+    root_cause: "New Relic rejected the OTLP request with HTTP 401/403 — the NEW_RELIC_LICENSE_KEY is invalid, of the wrong type (must be 'Ingest – License'), or doesn't belong to the region of NEW_RELIC_OTLP_ENDPOINT."
+    explanation: "Re-prompt for the license key. If the key is correct, also verify NEW_RELIC_OTLP_ENDPOINT matches the region (US / EU / staging)."
+
 priority_commands:
   # Oracle reachable at TCP level (replaces ping — ICMP isn't needed and is often blocked in containers)
   - nc -zv ${ORACLE_HOST} ${ORACLE_PORT}

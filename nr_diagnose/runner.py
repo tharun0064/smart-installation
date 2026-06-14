@@ -355,6 +355,13 @@ def _handle_failure(
 
             available_inputs = sorted(env_vars.keys())
             remediation = llm_agent.remediate(step_result, diag_results, agent_info, available_inputs)
+            # Deterministic anti-drift: if stderr contains a known error code declared in
+            # the agent's hints, enforce the routing rule and override the LLM if it drifted.
+            remediation, was_corrected = _enforce_error_routing(remediation, step_result, agent_info)
+            if was_corrected:
+                ui.console.print(
+                    "  [yellow]⚠[/yellow] [dim]Detected LLM drift — root cause auto-corrected from agent's error-code routing rules.[/dim]"
+                )
         except Exception as e:
             print(f"  LLM error: {e}")
             return "failed"
@@ -530,6 +537,58 @@ def _rerender_affected_steps(
             ui.console.print(f"  [red]Re-run failed: {(result.stderr or '').strip()[:200]}[/red]")
             return False
     return True
+
+
+def _enforce_error_routing(
+    remediation: RemediationPayload,
+    step_result: StepResult,
+    agent_info: Optional[RegistryAgent],
+) -> tuple:
+    """Override the LLM's remediation when it drifts away from a known error code.
+
+    Looks at agent_info.hints.error_code_routing — each rule has `patterns` to match in
+    stderr/stdout and an authoritative `bad_inputs` list. If a rule matches the failure
+    output but the LLM's `bad_inputs` doesn't intersect with the rule's expected inputs,
+    we replace bad_inputs/root_cause/remediation_command with the rule's authoritative
+    values. The rule with the most specific (longest) matched pattern wins.
+
+    Returns (remediation, was_corrected).
+    """
+    if not agent_info or not agent_info.hints.error_code_routing:
+        return remediation, False
+
+    haystack = (step_result.stderr or "") + "\n" + (step_result.stdout or "")
+    if not haystack.strip():
+        return remediation, False
+
+    # Find the most specific matching rule (longest pattern that appears in haystack).
+    best_match = None  # (rule, matched_pattern)
+    for rule in agent_info.hints.error_code_routing:
+        for pat in rule.patterns:
+            if pat and pat in haystack:
+                if best_match is None or len(pat) > len(best_match[1]):
+                    best_match = (rule, pat)
+
+    if best_match is None:
+        return remediation, False
+
+    rule, _ = best_match
+    expected = set(rule.bad_inputs or [])
+    actual = set(remediation.bad_inputs or [])
+
+    # If the LLM already flagged at least one of the expected inputs, trust it.
+    if expected and (expected & actual):
+        return remediation, False
+
+    # Drift detected — replace the structured fields with the rule's authoritative values.
+    overridden = RemediationPayload(
+        root_cause=rule.root_cause or remediation.root_cause,
+        human_explanation=rule.explanation or remediation.human_explanation,
+        remediation_command="",  # routing rules represent re-prompt-style fixes; clear any sed/etc.
+        is_destructive=False,
+        bad_inputs=list(expected),
+    )
+    return overridden, True
 
 
 def _build_subprocess_env(extra: Optional[Dict[str, str]]) -> Dict[str, str]:

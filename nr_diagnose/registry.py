@@ -7,7 +7,14 @@ from typing import List, Optional
 
 import yaml
 
-from .schemas import AgentManifest, DiagnosticHints, RequiredInput, RunbookIndex, RunbookIndexEntry
+from .schemas import (
+    AgentManifest,
+    DiagnosticHints,
+    ErrorCodeRoutingRule,
+    RequiredInput,
+    RunbookIndex,
+    RunbookIndexEntry,
+)
 
 
 @dataclass
@@ -67,9 +74,18 @@ def load_agent(agent_dir: str) -> Agent:
     hints_path = agent_path / "diagnostics" / "hints.yaml"
     if hints_path.exists():
         hints_data = yaml.safe_load(hints_path.read_text()) or {}
+        routing_rules = []
+        for r in (hints_data.get("error_code_routing") or []):
+            routing_rules.append(ErrorCodeRoutingRule(
+                patterns=list(r.get("patterns") or []),
+                bad_inputs=list(r.get("bad_inputs") or []),
+                root_cause=r.get("root_cause", ""),
+                explanation=r.get("explanation", ""),
+            ))
         agent.hints = DiagnosticHints(
             priority_commands=hints_data.get("priority_commands", []),
             context_hints=hints_data.get("context_hints", []),
+            error_code_routing=routing_rules,
         )
 
     # Load runbook index

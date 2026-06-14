@@ -26,9 +26,25 @@ class AgentManifest:
 
 
 @dataclass
+class ErrorCodeRoutingRule:
+    """Authoritative error-code → input-name mapping.
+
+    When the original failure's stderr matches any of `patterns`, the runner enforces
+    that the LLM's remediation flags the inputs in `bad_inputs`. If the LLM drifts
+    (proposes a fix that doesn't include any of these inputs), the runner overrides
+    its bad_inputs/root_cause with this rule's authoritative values.
+    """
+    patterns: List[str] = field(default_factory=list)
+    bad_inputs: List[str] = field(default_factory=list)
+    root_cause: str = ""
+    explanation: str = ""
+
+
+@dataclass
 class DiagnosticHints:
     priority_commands: List[str] = field(default_factory=list)
     context_hints: List[str] = field(default_factory=list)
+    error_code_routing: List[ErrorCodeRoutingRule] = field(default_factory=list)
 
 
 @dataclass
